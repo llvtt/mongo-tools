@@ -5,16 +5,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/mongodb/mongo-tools/common/archive"
 	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/log"
 	"gopkg.in/mgo.v2/bson"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 type NilPos struct{}
@@ -241,7 +242,7 @@ func (dump *MongoDump) NewIntent(dbName, colName string) (*intents.Intent, error
 		C:  colName,
 	}
 	if dump.OutputOptions.Out == "-" {
-		intent.BSONFile = &stdoutFile{Writer: dump.stdout}
+		intent.BSONFile = &stdoutFile{Writer: dump.OutputWriter}
 	} else {
 		if dump.OutputOptions.Archive != "" {
 			intent.BSONFile = &archive.MuxIn{Intent: intent, Mux: dump.archive.Mux}
@@ -268,7 +269,7 @@ func (dump *MongoDump) NewIntent(dbName, colName string) (*intents.Intent, error
 	}
 
 	// get a document count for scheduling purposes
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +351,7 @@ func (dump *MongoDump) CreateCollectionIntent(dbName, colName string) error {
 		return err
 	}
 
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return err
 	}
@@ -415,7 +416,7 @@ func (dump *MongoDump) createIntentFromOptions(dbName string, ci *collectionInfo
 func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 	// we must ensure folders for empty databases are still created, for legacy purposes
 
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return err
 	}
@@ -429,7 +430,7 @@ func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 	collInfo := &collectionInfo{}
 	for colsIter.Next(collInfo) {
 		// ignore <db>.system.* except for admin
-		if dbName != "admin" && strings.HasPrefix(collInfo.Name, "system.") {
+		if !dump.skipAdminUsersAndRoles && dbName != "admin" && strings.HasPrefix(collInfo.Name, "system.") {
 			log.Logvf(log.DebugHigh, "will not dump system collection '%s.%s'", dbName, collInfo.Name)
 			continue
 		}
@@ -458,7 +459,7 @@ func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 // CreateAllIntents iterates through all dbs and collections and builds
 // dump intents for each collection.
 func (dump *MongoDump) CreateAllIntents() error {
-	dbs, err := dump.sessionProvider.DatabaseNames()
+	dbs, err := dump.SessionProvider.DatabaseNames()
 	if err != nil {
 		return fmt.Errorf("error getting database names: %v", err)
 	}

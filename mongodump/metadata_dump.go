@@ -3,6 +3,7 @@ package mongodump
 import (
 	"bufio"
 	"fmt"
+
 	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
@@ -53,7 +54,7 @@ func (dump *MongoDump) dumpMetadata(intent *intents.Intent) error {
 	// that list as the "indexes" field of the metadata document.
 	log.Logvf(log.DebugHigh, "\treading indexes for `%v`", nsID)
 
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return err
 	}
