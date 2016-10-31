@@ -35,10 +35,12 @@ type MongoRestore struct {
 
 	TargetDirectory string
 
+	SkipUsersAndRoles bool
+
 	// other internal state
 	manager         *intents.Manager
 	safety          *mgo.Safe
-	progressManager *progress.Manager
+	ProgressManager *progress.Manager
 
 	objCheck         bool
 	oplogLimit       bson.MongoTimestamp
@@ -63,7 +65,7 @@ type MongoRestore struct {
 	termChan chan struct{}
 
 	// for testing. If set, this value will be used instead of os.Stdin
-	stdin io.Reader
+	InputReader io.Reader
 }
 
 type collectionIndexes map[string][]IndexDocument
@@ -225,8 +227,8 @@ func (restore *MongoRestore) ParseAndValidateOptions() error {
 			return fmt.Errorf("cannot restore from stdin without a specified collection")
 		}
 	}
-	if restore.stdin == nil {
-		restore.stdin = os.Stdin
+	if restore.InputReader == nil {
+		restore.InputReader = os.Stdin
 	}
 
 	return nil
@@ -501,7 +503,7 @@ func (wrc *wrappedReadCloser) Close() error {
 
 func (restore *MongoRestore) getArchiveReader() (rc io.ReadCloser, err error) {
 	if restore.InputOptions.Archive == "-" {
-		rc = ioutil.NopCloser(restore.stdin)
+		rc = ioutil.NopCloser(restore.InputReader)
 	} else {
 		targetStat, err := os.Stat(restore.InputOptions.Archive)
 		if err != nil {

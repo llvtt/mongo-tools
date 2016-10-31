@@ -23,9 +23,9 @@ const (
 // RestoreIntents iterates through all of the intents stored in the IntentManager, and restores them.
 func (restore *MongoRestore) RestoreIntents() error {
 	// start up the progress bar manager
-	restore.progressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
-	restore.progressManager.Start()
-	defer restore.progressManager.Stop()
+	restore.ProgressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
+	restore.ProgressManager.Start()
+	defer restore.ProgressManager.Stop()
 
 	log.Logvf(log.DebugLow, "restoring up to %v collections in parallel", restore.OutputOptions.NumParallelCollections)
 
@@ -225,8 +225,8 @@ func (restore *MongoRestore) RestoreCollectionToDB(dbName, colName string,
 		BarLength: progressBarLength,
 		IsBytes:   true,
 	}
-	restore.progressManager.Attach(bar)
-	defer restore.progressManager.Detach(bar)
+	restore.ProgressManager.Attach(bar)
+	defer restore.ProgressManager.Detach(bar)
 
 	maxInsertWorkers := restore.OutputOptions.NumInsertionWorkers
 	if restore.OutputOptions.MaintainInsertionOrder {

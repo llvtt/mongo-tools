@@ -3,6 +3,13 @@ package mongodump
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
 	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/json"
@@ -13,12 +20,6 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"io/ioutil"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"testing"
 )
 
 var (
@@ -69,7 +70,7 @@ func simpleMongoDumpInstance() *MongoDump {
 func getBareSession() (*mgo.Session, error) {
 	ssl := testutil.GetSSLOptions()
 	auth := testutil.GetAuthOptions()
-	sessionProvider, err := db.NewSessionProvider(options.ToolOptions{
+	SessionProvider, err := db.NewSessionProvider(options.ToolOptions{
 		Connection: &options.Connection{
 			Host: testServer,
 			Port: testPort,
@@ -80,7 +81,7 @@ func getBareSession() (*mgo.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	session, err := sessionProvider.GetSession()
+	session, err := SessionProvider.GetSession()
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +435,7 @@ func TestMongoDumpBSON(t *testing.T) {
 				Convey("it dumps to standard output", func() {
 					md.OutputOptions.Out = "-"
 					stdoutBuf := &bytes.Buffer{}
-					md.stdout = stdoutBuf
+					md.OutputWriter = stdoutBuf
 					err = md.Dump()
 					So(err, ShouldBeNil)
 					var count int

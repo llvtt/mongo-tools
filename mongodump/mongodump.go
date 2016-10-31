@@ -38,8 +38,10 @@ type MongoDump struct {
 	InputOptions  *InputOptions
 	OutputOptions *OutputOptions
 
+	SkipUsersAndRoles bool
+
 	// useful internals that we don't directly expose as options
-	sessionProvider *db.SessionProvider
+	SessionProvider *db.SessionProvider
 	manager         *intents.Manager
 	query           bson.M
 	oplogCollection string
@@ -47,13 +49,13 @@ type MongoDump struct {
 	isMongos        bool
 	authVersion     int
 	archive         *archive.Writer
-	progressManager *progress.Manager
+	ProgressManager *progress.Manager
 	// shutdownIntentsNotifier is provided to the multiplexer
 	// as well as the signal handler, and allows them to notify
 	// the intent dumpers that they should shutdown
 	shutdownIntentsNotifier *notifier
 	// the value of stdout gets initizlied to os.Stdout if it's unset
-	stdout       io.Writer
+	OutputWriter io.Writer
 	readPrefMode mgo.Mode
 	readPrefTags []bson.D
 }
@@ -116,17 +118,17 @@ func (dump *MongoDump) Init() error {
 	if err != nil {
 		return fmt.Errorf("bad option: %v", err)
 	}
-	if dump.stdout == nil {
-		dump.stdout = os.Stdout
+	if dump.OutputWriter == nil {
+		dump.OutputWriter = os.Stdout
 	}
-	dump.sessionProvider, err = db.NewSessionProvider(*dump.ToolOptions)
+	dump.SessionProvider, err = db.NewSessionProvider(*dump.ToolOptions)
 	if err != nil {
 		return fmt.Errorf("can't create session: %v", err)
 	}
 
 	// temporarily allow secondary reads for the isMongos check
-	dump.sessionProvider.SetReadPreference(mgo.Nearest)
-	dump.isMongos, err = dump.sessionProvider.IsMongos()
+	dump.SessionProvider.SetReadPreference(mgo.Nearest)
+	dump.isMongos, err = dump.SessionProvider.IsMongos()
 	if err != nil {
 		return err
 	}
@@ -149,7 +151,7 @@ func (dump *MongoDump) Init() error {
 			return fmt.Errorf("error parsing --readPreference : %v", err)
 		}
 		if len(tags) > 0 {
-			dump.sessionProvider.SetTags(tags)
+			dump.SessionProvider.SetTags(tags)
 		}
 	}
 
@@ -158,9 +160,9 @@ func (dump *MongoDump) Init() error {
 		log.Logvf(log.Always, db.WarningNonPrimaryMongosConnection)
 	}
 
-	dump.sessionProvider.SetReadPreference(mode)
-	dump.sessionProvider.SetTags(tags)
-	dump.sessionProvider.SetFlags(db.DisableSocketTimeout)
+	dump.SessionProvider.SetReadPreference(mode)
+	dump.SessionProvider.SetTags(tags)
+	dump.SessionProvider.SetFlags(db.DisableSocketTimeout)
 
 	// return a helpful error message for mongos --repair
 	if dump.OutputOptions.Repair && dump.isMongos {
@@ -168,7 +170,7 @@ func (dump *MongoDump) Init() error {
 	}
 
 	dump.manager = intents.NewIntentManager()
-	dump.progressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
+	dump.ProgressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
 	return nil
 }
 
@@ -199,11 +201,11 @@ func (dump *MongoDump) Dump() (err error) {
 		dump.query = bson.M(asMap)
 	}
 
-	if dump.OutputOptions.DumpDBUsersAndRoles {
+	if !dump.SkipUsersAndRoles && dump.OutputOptions.DumpDBUsersAndRoles {
 		// first make sure this is possible with the connected database
-		dump.authVersion, err = auth.GetAuthVersion(dump.sessionProvider)
+		dump.authVersion, err = auth.GetAuthVersion(dump.SessionProvider)
 		if err == nil {
-			err = auth.VerifySystemAuthVersion(dump.sessionProvider)
+			err = auth.VerifySystemAuthVersion(dump.SessionProvider)
 		}
 		if err != nil {
 			return fmt.Errorf("error getting auth schema version for dumpDbUsersAndRoles: %v", err)
@@ -267,7 +269,7 @@ func (dump *MongoDump) Dump() (err error) {
 		}
 	}
 
-	if dump.OutputOptions.DumpDBUsersAndRoles && dump.ToolOptions.DB != "admin" {
+	if !dump.SkipUsersAndRoles && dump.OutputOptions.DumpDBUsersAndRoles && dump.ToolOptions.DB != "admin" {
 		err = dump.CreateUsersRolesVersionIntentsForDB(dump.ToolOptions.DB)
 		if err != nil {
 			return err
@@ -282,7 +284,7 @@ func (dump *MongoDump) Dump() (err error) {
 		}
 		exampleIntent := dump.manager.Peek()
 		if exampleIntent != nil {
-			supported, err := dump.sessionProvider.SupportsRepairCursor(
+			supported, err := dump.SessionProvider.SupportsRepairCursor(
 				exampleIntent.DB, exampleIntent.C)
 			if !supported {
 				return err // no extra context needed
@@ -302,7 +304,7 @@ func (dump *MongoDump) Dump() (err error) {
 	}
 
 	if dump.OutputOptions.Archive != "" {
-		session, err := dump.sessionProvider.GetSession()
+		session, err := dump.SessionProvider.GetSession()
 		if err != nil {
 			return err
 		}
@@ -329,20 +331,22 @@ func (dump *MongoDump) Dump() (err error) {
 		return fmt.Errorf("error dumping system indexes: %v", err)
 	}
 
-	if dump.ToolOptions.DB == "admin" || dump.ToolOptions.DB == "" {
-		err = dump.DumpUsersAndRoles()
-		if err != nil {
-			return fmt.Errorf("error dumping users and roles: %v", err)
-		}
-	}
-	if dump.OutputOptions.DumpDBUsersAndRoles {
-		log.Logvf(log.Always, "dumping users and roles for %v", dump.ToolOptions.DB)
-		if dump.ToolOptions.DB == "admin" {
-			log.Logvf(log.Always, "skipping users/roles dump, already dumped admin database")
-		} else {
-			err = dump.DumpUsersAndRolesForDB(dump.ToolOptions.DB)
+	if !dump.SkipUsersAndRoles {
+		if dump.ToolOptions.DB == "admin" || dump.ToolOptions.DB == "" {
+			err = dump.DumpUsersAndRoles()
 			if err != nil {
-				return fmt.Errorf("error dumping users and roles for db: %v", err)
+				return fmt.Errorf("error dumping users and roles: %v", err)
+			}
+		}
+		if dump.OutputOptions.DumpDBUsersAndRoles {
+			log.Logvf(log.Always, "dumping users and roles for %v", dump.ToolOptions.DB)
+			if dump.ToolOptions.DB == "admin" {
+				log.Logvf(log.Always, "skipping users/roles dump, already dumped admin database")
+			} else {
+				err = dump.DumpUsersAndRolesForDB(dump.ToolOptions.DB)
+				if err != nil {
+					return fmt.Errorf("error dumping users and roles for db: %v", err)
+				}
 			}
 		}
 	}
@@ -370,8 +374,8 @@ func (dump *MongoDump) Dump() (err error) {
 	log.Logvf(log.DebugHigh, "dump phase II: regular collections")
 
 	// kick off the progress bar manager and begin dumping intents
-	dump.progressManager.Start()
-	defer dump.progressManager.Stop()
+	dump.ProgressManager.Start()
+	defer dump.ProgressManager.Stop()
 
 	if err := dump.DumpIntents(); err != nil {
 		return err
@@ -476,7 +480,7 @@ func (dump *MongoDump) DumpIntents() error {
 
 // DumpIntent dumps the specified database's collection.
 func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return err
 	}
@@ -570,8 +574,8 @@ func (dump *MongoDump) dumpQueryToWriter(
 		Watching:  dumpProgressor,
 		BarLength: progressBarLength,
 	}
-	dump.progressManager.Attach(bar)
-	defer dump.progressManager.Detach(bar)
+	dump.ProgressManager.Attach(bar)
+	defer dump.ProgressManager.Detach(bar)
 
 	err = dump.dumpIterToWriter(query.Iter(), intent.BSONFile, dumpProgressor)
 	_, dumpCount := dumpProgressor.Progress()
@@ -634,7 +638,7 @@ func (dump *MongoDump) dumpIterToWriter(
 // DumpUsersAndRolesForDB queries and dumps the users and roles tied to the given
 // database. Only works with an authentication schema version >= 3.
 func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
-	session, err := dump.sessionProvider.GetSession()
+	session, err := dump.SessionProvider.GetSession()
 	if err != nil {
 		return err
 	}
@@ -761,7 +765,7 @@ func (wwc *wrappedWriteCloser) Close() error {
 
 func (dump *MongoDump) getArchiveOut() (out io.WriteCloser, err error) {
 	if dump.OutputOptions.Archive == "-" {
-		out = &nopCloseWriter{dump.stdout}
+		out = &nopCloseWriter{dump.OutputWriter}
 	} else {
 		targetStat, err := os.Stat(dump.OutputOptions.Archive)
 		if err == nil && targetStat.IsDir() {
